@@ -199,6 +199,8 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
 
 bool GLRenderer2D::Init()
 {
+    LayerUpload.Clear(); SpriteUpload.Clear(); CompositorUpload.Clear();
+    SpritePreVertexUpload.Clear(); SpriteVertexUpload.Clear();
     // sprite prerender vertex data: 2x position, 1x sprite index
     int sprdatasize = (3 * 6) * 128;
     SpritePreVtxData = new u16[sprdatasize];
@@ -1282,8 +1284,7 @@ void GLRenderer2D::UpdateLayerConfig()
         }
     }
 
-    glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
+    LayerUpload.Upload(GL_UNIFORM_BUFFER, LayerConfigUBO, &LayerConfig, sizeof(LayerConfig));
 }
 
 void GLRenderer2D::UpdateOAM(int ystart, int yend)
@@ -1512,11 +1513,8 @@ void GLRenderer2D::UpdateOAM(int ystart, int yend)
             SpriteUseMosaic = true;
     }
 
-    glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER,
-                    0,
-                    offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(cfg.uOAM[0])),
-                    &cfg);
+    SpriteUpload.Upload(GL_UNIFORM_BUFFER, SpriteConfigUBO, &cfg,
+                        offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(cfg.uOAM[0])));
 }
 
 void GLRenderer2D::UpdateCompositorConfig()
@@ -1544,8 +1542,7 @@ void GLRenderer2D::UpdateCompositorConfig()
     CompositorConfig.uBlendCoef[1] = EVB;
     CompositorConfig.uBlendCoef[2] = EVY;
 
-    glBindBuffer(GL_UNIFORM_BUFFER, CompositorConfigUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CompositorConfig), &CompositorConfig);
+    CompositorUpload.Upload(GL_UNIFORM_BUFFER, CompositorConfigUBO, &CompositorConfig, sizeof(CompositorConfig));
 }
 
 
@@ -1585,8 +1582,7 @@ void GLRenderer2D::PrerenderSprites()
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteFB);
     glViewport(0, 0, 1024, 512);
 
-    glBindBuffer(GL_ARRAY_BUFFER, SpritePreVtxBuffer);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, vtxnum * 3 * sizeof(u16), SpritePreVtxData);
+    SpritePreVertexUpload.Upload(GL_ARRAY_BUFFER, SpritePreVtxBuffer, SpritePreVtxData, vtxnum * 3 * sizeof(u16));
 
     glBindVertexArray(SpritePreVtxArray);
     glDrawArrays(GL_TRIANGLES, 0, vtxnum);
@@ -1746,8 +1742,7 @@ void GLRenderer2D::RenderSprites(bool window, int ystart, int yend)
 
     if (vtxnum == 0) return;
 
-    glBindBuffer(GL_ARRAY_BUFFER, SpriteVtxBuffer);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, vtxnum * 5 * sizeof(u16), SpriteVtxData);
+    SpriteVertexUpload.Upload(GL_ARRAY_BUFFER, SpriteVtxBuffer, SpriteVtxData, vtxnum * 5 * sizeof(u16));
 
     glBindVertexArray(SpriteVtxArray);
     glDrawArrays(GL_TRIANGLES, 0, vtxnum);

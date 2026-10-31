@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include "OpenGLSupport.h"
+#include "OpenGL_Upload.h"
 #include "GPU2D.h"
 
 namespace melonDS
@@ -205,6 +206,8 @@ private:
     u32 SpriteDispCnt {};
     bool SpriteConfigDirty {};
     bool SpriteDirty {};
+    OpenGL::BufferUploadCache LayerUpload, SpriteUpload, CompositorUpload;
+    OpenGL::BufferUploadCache SpritePreVertexUpload, SpriteVertexUpload;
 
     u16 TempPalBuffer[256 * (1 + (4*16))] {};
 

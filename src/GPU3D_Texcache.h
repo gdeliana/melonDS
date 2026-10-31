@@ -48,7 +48,7 @@ public:
         : GPU(gpu), TexLoader(texloader) // probably better if this would be a move constructor???
     {}
 
-    u64 MaskedHash(u8* vram, u32 vramSize, u32 addr, u32 size)
+    static u64 MaskedHash(u8* vram, u32 vramSize, u32 addr, u32 size)
     {
         u64 hash = 0;
 
@@ -73,8 +73,10 @@ public:
         return hash;
     }
 
-    bool CheckInvalid(u32 start, u32 size, u64 oldHash, u64* dirty, u8* vram, u32 vramSize)
+    static bool CheckInvalid(u32 start, u32 size, u64 oldHash, u64* dirty, u8* vram, u32 vramSize)
     {
+        if (size == 0) return false;
+
         u32 startBit = start / VRAMDirtyGranularity;
         u32 bitsCount = ((start + size + VRAMDirtyGranularity - 1) / VRAMDirtyGranularity) - startBit;
 
@@ -82,10 +84,14 @@ public:
         u64 entriesCount = ((startBit + bitsCount + 0x3F) >> 6) - startEntry;
         for (u32 j = startEntry; j < startEntry + entriesCount; j++)
         {
-            if (GetRangedBitMask(j, startBit, bitsCount) & dirty[j & ((vramSize / VRAMDirtyGranularity)-1)])
+            // j indexes 64-bit words, not individual dirty bits. Textures can
+            // wrap around VRAM (and can be larger than the VRAM region).
+            const u32 dirtyWordMask = (vramSize / (VRAMDirtyGranularity * 64)) - 1;
+            if (GetRangedBitMask(j, startBit, bitsCount) & dirty[j & dirtyWordMask])
             {
-                if (MaskedHash(vram, vramSize, start, size) != oldHash)
-                    return true;
+                // The hash covers the entire texture. Matching it once is
+                // sufficient even when more dirty words overlap this range.
+                return MaskedHash(vram, vramSize, start, size) != oldHash;
             }
         }
 

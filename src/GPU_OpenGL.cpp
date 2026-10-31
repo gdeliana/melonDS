@@ -348,6 +348,7 @@ void GLRenderer::SetScaleFactor(int scale)
         return;
 
     ScaleFactor = scale;
+    GPU.InvalidateFramebuffer();
     ScreenW = 256 * scale;
     ScreenH = 192 * scale;
 
@@ -872,6 +873,7 @@ void GLRenderer::SyncVRAMCapture(u32 bank, u32 start, u32 len, bool complete)
     u8* vram = GPU.VRAM[bank];
 
     glDisable(GL_DITHER);
+    glDisable(GL_SCISSOR_TEST);
 
     if (len == 0) // 128x128
     {
@@ -887,14 +889,22 @@ void GLRenderer::SyncVRAMCapture(u32 bank, u32 start, u32 len, bool complete)
     }
     else
     {
+        // Only convert the rows that will be read. Wrapped ranges use the
+        // full surface, avoiding an extra downscale draw for the second span.
+        glEnable(GL_SCISSOR_TEST);
+        if (start + len <= 4)
+            glScissor(0, start * 64, 256, len * 64);
+        else
+            glScissor(0, 0, 256, 256);
         DownscaleCapture(256, 256, bank);
+        glDisable(GL_SCISSOR_TEST);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, CaptureSyncFB);
 
         u32 pos = start;
         for (u32 i = 0; i < len;)
         {
-            u32 end = pos + len;
+            u32 end = pos + (len - i);
             if (end > 4)
                 end = 4;
 

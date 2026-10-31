@@ -55,7 +55,7 @@ constexpr auto GetCRC32Table()
 
 u32 CRC32(const u8 *data, int len, u32 start)
 {
-    auto Crc32Table = GetCRC32Table();
+    static constexpr auto Crc32Table = GetCRC32Table();
 
 	u32 crc = start ^ 0xFFFFFFFF;
 

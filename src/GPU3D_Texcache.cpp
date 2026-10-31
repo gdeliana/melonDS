@@ -170,26 +170,30 @@ void ConvertCompressedTexture(u32 width, u32 height, u32* output, u32 addr, u32 
                 break;
             }
 
-            // in 2020 our default data types are big enough to be used as lookup tables...
-            u64 packed = color0 | ((u64)color1 << 16) | ((u64)color2 << 32) | ((u64)color3 << 48);
+            // Each palette entry is shared by up to sixteen pixels. Convert
+            // after interpolation, once per block rather than once per pixel.
+            const u16 colors[4] = {color0, color1, color2, color3};
+            u32 palette[4];
+            for (int i = 0; i < 4; i++)
+            {
+                const u16 color = colors[i];
+                switch (outputFmt)
+                {
+                case outputFmt_RGB6A5: palette[i] = ConvertRGB5ToRGB6(color)
+                    | ((color & 0x8000) ? 0x1F000000 : 0); break;
+                case outputFmt_RGBA8: palette[i] = ConvertRGB5ToRGB8(color)
+                    | ((color & 0x8000) ? 0xFF000000 : 0); break;
+                case outputFmt_BGRA8: palette[i] = ConvertRGB5ToBGR8(color)
+                    | ((color & 0x8000) ? 0xFF000000 : 0); break;
+                }
+            }
 
             for (int j = 0; j < 4; j++)
             {
                 for (int i = 0; i < 4; i++)
                 {
-                    u32 colorIdx = 16 * ((data >> 2 * (i + j * 4)) & 0x3);
-                    u16 color = (packed >> colorIdx) & 0xFFFF;
-                    u32 res;
-                    switch (outputFmt)
-                    {
-                    case outputFmt_RGB6A5: res = ConvertRGB5ToRGB6(color)
-                        | ((color & 0x8000) ? 0x1F000000 : 0); break;
-                    case outputFmt_RGBA8: res = ConvertRGB5ToRGB8(color)
-                        | ((color & 0x8000) ? 0xFF000000 : 0); break;
-                    case outputFmt_BGRA8: res = ConvertRGB5ToBGR8(color)
-                        | ((color & 0x8000) ? 0xFF000000 : 0); break;
-                    }
-                    output[x * 4 + i + (y * 4 + j) * width] = res;
+                    u32 colorIdx = (data >> 2 * (i + j * 4)) & 0x3;
+                    output[x * 4 + i + (y * 4 + j) * width] = palette[colorIdx];
                 }
             }
         }
@@ -201,6 +205,18 @@ template void ConvertCompressedTexture<outputFmt_RGB6A5>(u32, u32, u32*, u32, u3
 template <int outputFmt, int X, int Y>
 void ConvertAXIYTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAddr, GPU& gpu)
 {
+    u32 palette[1 << Y];
+    for (u32 i = 0; i < (1 << Y); i++)
+    {
+        u16 color = gpu.ReadVRAMFlat_TexPal<u16>(palAddr + i * 2);
+        switch (outputFmt)
+        {
+        case outputFmt_RGB6A5: palette[i] = ConvertRGB5ToRGB6(color); break;
+        case outputFmt_RGBA8: palette[i] = ConvertRGB5ToRGB8(color); break;
+        case outputFmt_BGRA8: palette[i] = ConvertRGB5ToBGR8(color); break;
+        }
+    }
+
     for (int y = 0; y < height; y++)
     {
         for (int x = 0; x < width; x++)
@@ -209,7 +225,6 @@ void ConvertAXIYTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAdd
 
             u32 idx = val & ((1 << Y) - 1);
 
-            u16 color = gpu.ReadVRAMFlat_TexPal<u16>(palAddr + idx * 2);
             u32 alpha = (val >> Y) & ((1 << X) - 1);
             if (X != 5)
                 alpha = alpha * 4 + alpha / 2;
@@ -217,10 +232,10 @@ void ConvertAXIYTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAdd
             u32 res;
             switch (outputFmt)
             {
-            case outputFmt_RGB6A5: res = ConvertRGB5ToRGB6(color) | alpha << 24; break;
+            case outputFmt_RGB6A5: res = palette[idx] | alpha << 24; break;
             // make sure full alpha == 255
-            case outputFmt_RGBA8: res = ConvertRGB5ToRGB8(color) | (alpha << 27 | (alpha & 0x1C) << 22); break;
-            case outputFmt_BGRA8: res = ConvertRGB5ToBGR8(color) | (alpha << 27 | (alpha & 0x1C) << 22); break;
+            case outputFmt_RGBA8:
+            case outputFmt_BGRA8: res = palette[idx] | (alpha << 27 | (alpha & 0x1C) << 22); break;
             }
             output[x + y * width] = res;
         }
@@ -230,37 +245,58 @@ void ConvertAXIYTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAdd
 template void ConvertAXIYTexture<outputFmt_RGB6A5, 5, 3>(u32, u32, u32*, u32, u32, GPU&);
 template void ConvertAXIYTexture<outputFmt_RGB6A5, 3, 5>(u32, u32, u32*, u32, u32, GPU&);
 
-template <int outputFmt, int colorBits>
-void ConvertNColorsTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAddr, bool color0Transparent, GPU& gpu)
+template <int outputFmt, int colorBits, bool cachePalette>
+static void ConvertNColorsTextureImpl(u32 width, u32 height, u32* output, u32 addr, u32 palAddr, bool color0Transparent, GPU& gpu)
 {
-    for (int y = 0; y < height; y++)
+    u32 palette[1 << colorBits];
+    if constexpr (cachePalette)
     {
-        for (int x = 0; x < width / (16 / colorBits); x++)
+        for (u32 i = 0; i < (1 << colorBits); i++)
         {
-            // smallest possible row is 8 pixels with 2bpp => fits in u16
+            u16 color = gpu.ReadVRAMFlat_TexPal<u16>(palAddr + i * 2);
+            bool transparent = color0Transparent && i == 0;
+            switch (outputFmt)
+            {
+            case outputFmt_RGB6A5: palette[i] = ConvertRGB5ToRGB6(color) | (transparent ? 0 : 0x1F000000); break;
+            case outputFmt_RGBA8: palette[i] = ConvertRGB5ToRGB8(color) | (transparent ? 0 : 0xFF000000); break;
+            case outputFmt_BGRA8: palette[i] = ConvertRGB5ToBGR8(color) | (transparent ? 0 : 0xFF000000); break;
+            }
+        }
+    }
+    for (u32 y = 0; y < height; y++)
+        for (u32 x = 0; x < width / (16 / colorBits); x++)
+        {
             u16 val = gpu.ReadVRAMFlat_Texture<u16>(addr + 2 * (x + y * (width / (16 / colorBits))));
-
             for (int i = 0; i < 16 / colorBits; i++)
             {
                 u32 index = val & ((1 << colorBits) - 1);
                 val >>= colorBits;
-                u16 color = gpu.ReadVRAMFlat_TexPal<u16>(palAddr + index * 2);
-
-                bool transparent = color0Transparent && index == 0;
                 u32 res;
-                switch (outputFmt)
+                if constexpr (cachePalette) res = palette[index];
+                else
                 {
-                case outputFmt_RGB6A5: res = ConvertRGB5ToRGB6(color)
-                    | (transparent ? 0 : 0x1F000000); break;
-                case outputFmt_RGBA8: res = ConvertRGB5ToRGB8(color)
-                    | (transparent ? 0 : 0xFF000000); break;
-                case outputFmt_BGRA8: res = ConvertRGB5ToBGR8(color)
-                    | (transparent ? 0 : 0xFF000000); break;
+                    u16 color = gpu.ReadVRAMFlat_TexPal<u16>(palAddr + index * 2);
+                    bool transparent = color0Transparent && index == 0;
+                    switch (outputFmt)
+                    {
+                    case outputFmt_RGB6A5: res = ConvertRGB5ToRGB6(color) | (transparent ? 0 : 0x1F000000); break;
+                    case outputFmt_RGBA8: res = ConvertRGB5ToRGB8(color) | (transparent ? 0 : 0xFF000000); break;
+                    case outputFmt_BGRA8: res = ConvertRGB5ToBGR8(color) | (transparent ? 0 : 0xFF000000); break;
+                    }
                 }
                 output[x * (16 / colorBits) + y * width + i] = res;
             }
         }
-    }
+}
+
+template <int outputFmt, int colorBits>
+void ConvertNColorsTexture(u32 width, u32 height, u32* output, u32 addr, u32 palAddr, bool color0Transparent, GPU& gpu)
+{
+    // Do not convert 256 palette entries for a texture with fewer pixels.
+    if (colorBits == 8 && width * height < 256)
+        ConvertNColorsTextureImpl<outputFmt, colorBits, false>(width, height, output, addr, palAddr, color0Transparent, gpu);
+    else
+        ConvertNColorsTextureImpl<outputFmt, colorBits, true>(width, height, output, addr, palAddr, color0Transparent, gpu);
 }
 
 template void ConvertNColorsTexture<outputFmt_RGB6A5, 2>(u32, u32, u32*, u32, u32, bool, GPU&);

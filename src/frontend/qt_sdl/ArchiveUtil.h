@@ -36,10 +36,12 @@ namespace Archive
 {
 
 using namespace melonDS;
+// Match the size limit for ROMs loaded from ordinary files.
+constexpr u32 MaxROMSize = 0x40000000;
 QVector<QString> ListArchive(QString path);
+// Decompress the selected entry directly into memory. Returns its length, or
+// -1 with empty outputs on failure. No files are extracted to disk.
 s32 ExtractFileFromArchive(QString path, QString wantedFile, std::unique_ptr<u8[]>& filedata, u32* filesize);
-//QVector<QString> ExtractFileFromArchive(QString path, QString wantedFile, QByteArray *romBuffer);
-//u32 ExtractFileFromArchive(const char* path, const char* wantedFile, u8 **romdata);
 
 }
 

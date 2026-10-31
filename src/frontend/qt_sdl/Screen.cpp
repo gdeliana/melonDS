@@ -40,6 +40,7 @@
 #include "Config.h"
 
 #include "main_shaders.h"
+#include "xbrz_shader.h"
 #include "OSD_shaders.h"
 #include "font.h"
 #include "version.h"
@@ -86,6 +87,7 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     
     loadConfig();
     setFilter(mainWindow->getWindowConfig().GetBool("ScreenFilter"));
+    setXbrzFilter(mainWindow->getWindowConfig().GetBool("ScreenXbrz"));
 
     splashLogo = QPixmap(":/melon-logo");
 
@@ -134,6 +136,11 @@ void ScreenPanel::loadConfig()
 void ScreenPanel::setFilter(bool filter)
 {
     this->filter = filter;
+}
+
+void ScreenPanel::setXbrzFilter(bool enabled)
+{
+    xbrzFilter = enabled;
 }
 
 void ScreenPanel::setMouseHide(bool enable, int delay)
@@ -930,11 +937,45 @@ void ScreenPanelGL::initOpenGL()
                                          {{"oColor", 0}});
 
     glUseProgram(screenShaderProgram);
-    glUniform1i(glGetUniformLocation(screenShaderProgram, "TopScreenTex"), 0);
-    glUniform1i(glGetUniformLocation(screenShaderProgram, "BottomScreenTex"), 1);
+    glUniform1i(glGetUniformLocation(screenShaderProgram, "ScreenTex"), 0);
 
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
+
+    if (OpenGL::CompileVertexFragmentProgram(xbrzShaderProgram,
+                                             kScreenVS, kScreenFS_Xbrz,
+                                             "xBRZ screen shader",
+                                             {{"vPosition", 0}, {"vTexcoord", 1}},
+                                             {{"oColor", 0}}) &&
+        OpenGL::CompileVertexFragmentProgram(xbrzAnalysisProgram,
+                                             kScreenVS_XbrzAnalysis, kScreenFS_XbrzAnalysis,
+                                             "xBRZ edge analysis", {}, {{"oInfo", 0}}))
+    {
+        glUseProgram(xbrzShaderProgram);
+        glUniform1i(glGetUniformLocation(xbrzShaderProgram, "ScreenTex"), 0);
+        glUniform1i(glGetUniformLocation(xbrzShaderProgram, "XbrzInfoTex"), 1);
+        xbrzShaderScreenSizeULoc = glGetUniformLocation(xbrzShaderProgram, "uScreenSize");
+        xbrzShaderTransformULoc = glGetUniformLocation(xbrzShaderProgram, "uTransform");
+        xbrzNormalScaleULoc = glGetUniformLocation(xbrzShaderProgram, "uNormalScale");
+        glUseProgram(xbrzAnalysisProgram);
+        glUniform1i(glGetUniformLocation(xbrzAnalysisProgram, "ScreenTex"), 0);
+        xbrzAnalysisLayerULoc = glGetUniformLocation(xbrzAnalysisProgram, "uLayer");
+        glGenTextures(1, &xbrzInfoTexture);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, xbrzInfoTexture);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glActiveTexture(GL_TEXTURE0);
+        glGenFramebuffers(2, xbrzFramebuffer);
+    }
+    else
+    {
+        // The compile helper deletes a failed program. Only the display
+        // program may still be valid if the analysis compilation failed.
+        if (glIsProgram(xbrzShaderProgram)) glDeleteProgram(xbrzShaderProgram);
+        xbrzShaderProgram = xbrzAnalysisProgram = 0;
+        Platform::Log(Platform::LogLevel::Warn, "xBRZ shader unavailable; using regular screen filtering\n");
+    }
 
     const float vertices[] =
     {
@@ -973,6 +1014,17 @@ void ScreenPanelGL::initOpenGL()
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, 256, 192, 2, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
 
+    if (GLAD_GL_VERSION_3_3)
+    {
+        glGenSamplers(2, screenSamplers);
+        for (int i = 0; i < 2; i++)
+        {
+            glSamplerParameteri(screenSamplers[i], GL_TEXTURE_MIN_FILTER, i ? GL_LINEAR : GL_NEAREST);
+            glSamplerParameteri(screenSamplers[i], GL_TEXTURE_MAG_FILTER, i ? GL_LINEAR : GL_NEAREST);
+            glSamplerParameteri(screenSamplers[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glSamplerParameteri(screenSamplers[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+    }
 
     OpenGL::CompileVertexFragmentProgram(osdShader,
                                          kScreenVS_OSD, kScreenFS_OSD,
@@ -1032,11 +1084,23 @@ void ScreenPanelGL::deinitOpenGL()
     glContext->MakeCurrent();
 
     glDeleteTextures(1, &screenTexture);
+    if (screenSamplers[0]) glDeleteSamplers(2, screenSamplers);
+    screenSamplers[0] = screenSamplers[1] = 0;
 
     glDeleteVertexArrays(1, &screenVertexArray);
     glDeleteBuffers(1, &screenVertexBuffer);
 
     glDeleteProgram(screenShaderProgram);
+    glDeleteProgram(xbrzShaderProgram);
+    glDeleteProgram(xbrzAnalysisProgram);
+    glDeleteTextures(1, &xbrzInfoTexture);
+    glDeleteFramebuffers(2, xbrzFramebuffer);
+    xbrzShaderProgram = xbrzAnalysisProgram = 0;
+    xbrzInfoTexture = xbrzFramebuffer[0] = xbrzFramebuffer[1] = 0;
+    xbrzFramebufferComplete = false;
+    xbrzSourceWidth = xbrzSourceHeight = 0;
+    uploadedFrameVersion = analyzedFrameVersion = 0;
+    analyzedLayers = 0;
 
 
     for (const auto& [key, tex] : osdTextures)
@@ -1101,6 +1165,61 @@ void ScreenPanelGL::osdDeleteItem(OSDItem* item)
     ScreenPanel::osdDeleteItem(item);
 }
 
+bool ScreenPanelGL::prepareXbrz(int width, int height, unsigned int layers, uint64_t version)
+{
+    if (version != analyzedFrameVersion || width != xbrzSourceWidth || height != xbrzSourceHeight)
+    {
+        analyzedFrameVersion = version;
+        analyzedLayers = 0;
+    }
+    const unsigned int pending = layers & ~analyzedLayers;
+    // Texture unit 0 retains the renderer's actual output (including enhanced
+    // OpenGL resolutions). No framebuffer readback or CPU scaling is needed.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, xbrzInfoTexture);
+    if (!pending && xbrzFramebufferComplete)
+    {
+        // Presentation unbinds unit 1 after each draw. Reuse the analysis,
+        // but still restore its texture binding for the display pass.
+        glActiveTexture(GL_TEXTURE0);
+        return true;
+    }
+    if (width != xbrzSourceWidth || height != xbrzSourceHeight)
+    {
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_R32UI, width, height, 2,
+                     0, GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+        xbrzSourceWidth = width;
+        xbrzSourceHeight = height;
+        xbrzFramebufferComplete = true;
+        for (int layer = 0; layer < 2; layer++)
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, xbrzFramebuffer[layer]);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, xbrzInfoTexture, 0, layer);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                xbrzFramebufferComplete = false;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (!xbrzFramebufferComplete)
+            Platform::Log(Platform::LogLevel::Warn, "xBRZ framebuffer unavailable\n");
+    }
+    glActiveTexture(GL_TEXTURE0);
+    if (!xbrzFramebufferComplete) return false;
+
+    glViewport(0, 0, width, height);
+    glUseProgram(xbrzAnalysisProgram);
+    glBindVertexArray(screenVertexArray);
+    for (int layer = 0; layer < 2; layer++)
+    {
+        if (!(pending & (1u << layer))) continue;
+        glBindFramebuffer(GL_FRAMEBUFFER, xbrzFramebuffer[layer]);
+        glUniform1i(xbrzAnalysisLayerULoc, layer);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    analyzedLayers |= pending;
+    return true;
+}
+
 void ScreenPanelGL::drawScreen()
 {
     if (!glContext) return;
@@ -1127,9 +1246,7 @@ void ScreenPanelGL::drawScreen()
     if (emuThread->emuIsActive())
     {
         auto nds = emuInstance->getNDS();
-
-        glUseProgram(screenShaderProgram);
-        glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+        const uint64_t frameVersion = nds->GPU.GetFramebufferVersion();
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
@@ -1140,10 +1257,14 @@ void ScreenPanelGL::drawScreen()
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_ARRAY, screenTexture);
 
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 192, 1, GL_BGRA,
+            if (frameVersion != uploadedFrameVersion)
+            {
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 192, 1, GL_BGRA,
                             GL_UNSIGNED_BYTE, topbuf);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 256, 192, 1, GL_BGRA,
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 256, 192, 1, GL_BGRA,
                             GL_UNSIGNED_BYTE, bottombuf);
+                uploadedFrameVersion = frameVersion;
+            }
         }
         else
         {
@@ -1155,20 +1276,67 @@ void ScreenPanelGL::drawScreen()
 
         screenSettingsLock.lock();
 
-        GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, filter);
+        const bool wantXbrz = xbrzFilter.load() && xbrzShaderProgram != 0;
+        bool useXbrz = false;
+        bool upscale[kMaxScreenTransforms] = {};
+        float scaleX[kMaxScreenTransforms], scaleY[kMaxScreenTransforms];
+        if (wantXbrz)
+        {
+            int sourceWidth, sourceHeight;
+            nds->GPU.GetRenderer().GetFramebufferSize(sourceWidth, sourceHeight);
+            unsigned int layers = 0;
+            for (int i = 0; i < numScreens; i++)
+            {
+                const float* m = screenMatrix[i];
+                scaleX[i] = std::hypot(m[0], m[1]) * 256 * factor / sourceWidth;
+                scaleY[i] = std::hypot(m[2], m[3]) * 192 * factor / sourceHeight;
+                upscale[i] = scaleX[i] > 1.0001f || scaleY[i] > 1.0001f;
+                if (upscale[i])
+                    layers |= 1u << screenKind[i];
+            }
+            // Also avoids expensive source-resolution analysis when the OpenGL
+            // renderer already renders at or above the displayed resolution.
+            if (layers) useXbrz = prepareXbrz(sourceWidth, sourceHeight, layers, frameVersion);
+            glViewport(0, 0, w, h);
+        }
+        const bool bilinear = !wantXbrz && this->filter.load();
+        if (screenSamplers[0])
+            glBindSampler(0, screenSamplers[bilinear ? 1 : 0]);
+        else
+        {
+            // OpenGL 3.2 fallback; sampler objects are core in 3.3.
+            const GLint filter = bilinear ? GL_LINEAR : GL_NEAREST;
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, filter);
+        }
 
         glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
         glBindVertexArray(screenVertexArray);
 
         for (int i = 0; i < numScreens; i++)
         {
-            glUniformMatrix2x3fv(screenShaderTransformULoc, 1, GL_TRUE, screenMatrix[i]);
+            const bool filtered = useXbrz && upscale[i];
+            const GLint transformLoc = filtered ? xbrzShaderTransformULoc : screenShaderTransformULoc;
+            glUseProgram(filtered ? xbrzShaderProgram : screenShaderProgram);
+            glUniform2f(filtered ? xbrzShaderScreenSizeULoc : screenShaderScreenSizeULoc,
+                        w / factor, h / factor);
+            if (filtered)
+            {
+                const float sx = std::max(scaleX[i], 1.0f);
+                const float sy = std::max(scaleY[i], 1.0f);
+                const float diagonal = std::hypot(sx, sy);
+                glUniform4f(xbrzNormalScaleULoc, diagonal / 2,
+                            std::hypot(sx, 2*sy) / 5, std::hypot(2*sx, sy) / 5, diagonal / 4);
+            }
+            glUniformMatrix2x3fv(transformLoc, 1, GL_TRUE, screenMatrix[i]);
             glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2 * 3, 2 * 3);
         }
 
         screenSettingsLock.unlock();
+        if (screenSamplers[0]) glBindSampler(0, 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        glActiveTexture(GL_TEXTURE0);
     }
 
     osdUpdate();

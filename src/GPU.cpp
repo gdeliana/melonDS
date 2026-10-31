@@ -17,6 +17,7 @@
 */
 
 #include <string.h>
+#include <atomic>
 #include "NDS.h"
 #include "GPU.h"
 
@@ -96,6 +97,14 @@ GPU::~GPU() noexcept
     NDS.UnregisterEventFuncs(Event_DisplayFIFO);
 }
 
+void GPU::InvalidateFramebuffer() noexcept
+{
+    // A process-wide stamp also distinguishes new GPU objects at reused
+    // addresses. It is presentation metadata and is never loaded from a state.
+    static std::atomic<u64> next{0};
+    FramebufferVersion = next.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 void GPU::ResetVRAMCache() noexcept
 {
     for (int i = 0; i < 9; i++)
@@ -126,6 +135,7 @@ void GPU::ResetVRAMCache() noexcept
 
 void GPU::Reset() noexcept
 {
+    InvalidateFramebuffer();
     ScreensEnabled = false;
     ScreenSwap = false;
 
@@ -199,6 +209,7 @@ void GPU::Reset() noexcept
 
 void GPU::Stop() noexcept
 {
+    InvalidateFramebuffer();
     Rend->Stop();
 }
 
@@ -303,6 +314,7 @@ void GPU::DoSavestate(Savestate* file) noexcept
 
     if (!file->Saving)
     {
+        InvalidateFramebuffer();
         ResetVRAMCache();
         OAMDirty = 0x3;
         PaletteDirty = 0x5F;
@@ -314,6 +326,7 @@ void GPU::DoSavestate(Savestate* file) noexcept
 
 void GPU::SetRenderer(std::unique_ptr<Renderer>&& renderer) noexcept
 {
+    InvalidateFramebuffer();
     SyncAllVRAMCaptures();
 
     bool good = false;
@@ -1185,6 +1198,7 @@ void GPU::StartHBlank(u32 line) noexcept
 void GPU::FinishFrame(u32 lines) noexcept
 {
     Rend->SwapBuffers();
+    InvalidateFramebuffer();
 
     TotalScanlines = lines;
 
@@ -1197,6 +1211,7 @@ void GPU::FinishFrame(u32 lines) noexcept
 
 void GPU::BlankFrame() noexcept
 {
+    InvalidateFramebuffer();
     /*int backbuf = FrontBuffer ? 0 : 1;
     int fbsize;
     if (GPU3D.IsRendererAccelerated())

@@ -220,6 +220,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 {
 
     showOSD = windowCfg.GetBool("ShowOSD");
+    // Older configurations allowed both toggles; xBRZ had priority.
+    if (windowCfg.GetBool("ScreenXbrz"))
+        windowCfg.SetBool("ScreenFilter", false);
 
     setWindowTitle("melonDS " MELONDS_VERSION);
     setAttribute(Qt::WA_DeleteOnClose);
@@ -567,9 +570,19 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
             menu->addSeparator();
 
-            actScreenFiltering = menu->addAction("Screen filtering");
-            actScreenFiltering->setCheckable(true);
-            connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
+            QMenu* filteringMenu = menu->addMenu("Filtering");
+            grpScreenFiltering = new QActionGroup(filteringMenu);
+            grpScreenFiltering->setExclusive(true);
+            actNoScreenFiltering = filteringMenu->addAction("None (nearest neighbor)");
+            actScreenFiltering = filteringMenu->addAction("Bilinear filtering");
+            actXbrzFiltering = filteringMenu->addAction("xBRZ filtering");
+            for (QAction* action : {actNoScreenFiltering, actScreenFiltering, actXbrzFiltering})
+            {
+                action->setCheckable(true);
+                grpScreenFiltering->addAction(action);
+            }
+            actXbrzFiltering->setToolTip("GPU pixel-art scaling for software and OpenGL renderers (requires OpenGL display)");
+            connect(grpScreenFiltering, &QActionGroup::triggered, this, &MainWindow::onChangeScreenFiltering);
 
             actShowOSD = menu->addAction("Show OSD");
             actShowOSD->setCheckable(true);
@@ -727,7 +740,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                 actScreenAspectBot[i]->setChecked(true);
         }
 
-        actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
+        QAction* selectedFilter = windowCfg.GetBool("ScreenXbrz") ? actXbrzFiltering
+            : windowCfg.GetBool("ScreenFilter") ? actScreenFiltering : actNoScreenFiltering;
+        selectedFilter->setChecked(true);
         actShowOSD->setChecked(showOSD);
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
@@ -855,7 +870,9 @@ void MainWindow::createScreenPanel()
     setCentralWidget(panel);
 
     if (hasMenu)
-        actScreenFiltering->setEnabled(hasOGL);
+    {
+        grpScreenFiltering->setEnabled(hasOGL);
+    }
     panel->osdSetEnabled(showOSD);
 
     connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
@@ -2097,12 +2114,14 @@ void MainWindow::onOpenNewWindow()
     emuInstance->createWindow();
 }
 
-void MainWindow::onChangeScreenFiltering(bool checked)
+void MainWindow::onChangeScreenFiltering(QAction* action)
 {
-    windowCfg.SetBool("ScreenFilter", checked);
-
-    //emit screenLayoutChange();
-    panel->setFilter(checked);
+    const bool bilinear = action == actScreenFiltering;
+    const bool xbrz = action == actXbrzFiltering;
+    windowCfg.SetBool("ScreenFilter", bilinear);
+    windowCfg.SetBool("ScreenXbrz", xbrz);
+    panel->setFilter(bilinear);
+    panel->setXbrzFilter(xbrz);
 }
 
 void MainWindow::onChangeShowOSD(bool checked)

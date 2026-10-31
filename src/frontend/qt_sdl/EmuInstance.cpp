@@ -1839,7 +1839,8 @@ bool EmuInstance::loadROMData(const QStringList& filepath, std::unique_ptr<u8[]>
         }
 
         std::string std_archivepath = filepath.at(0).toStdString();
-        basepath = std_archivepath.substr(0, lastSep(std_archivepath));
+        const int archiveSep = lastSep(std_archivepath);
+        basepath = archiveSep == -1 ? "" : std_archivepath.substr(0, archiveSep);
 
         std::string std_romname = filepath.at(1).toStdString();
         romname = std_romname.substr(lastSep(std_romname)+1);

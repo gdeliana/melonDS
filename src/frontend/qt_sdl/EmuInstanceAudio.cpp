@@ -168,7 +168,9 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     inst->nds->SPU.SetOutputSkew(skew);
 
     int len_in = inst->audioGetNumSamplesOut(len);
-    if (len_in > inst->audioBufSize) len_in = inst->audioBufSize;
+    // The device can request a different length from the preferred buffer.
+    // Never read more frames than fit in this callback's output storage.
+    len_in = std::clamp(len_in, 0, std::min(len, inst->audioBufSize));
 
     SDL_LockMutex(inst->audioSyncLock);
     int num_in = inst->nds->SPU.ReadOutput((s16*) stream, len_in);
@@ -188,12 +190,18 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
             samples[i] = ((s32) samples[i] * inst->audioVolume) >> 8;
     }
 
-    if (num_in < len_in)
+    if (num_in < len)
     {
         int last = num_in-1;
 
-        for (int i = num_in; i < len_in; i++)
-            ((u32*)stream)[i] = ((u32*)stream)[last];
+        s16* samples = reinterpret_cast<s16*>(stream);
+        const s16 left = samples[last*2];
+        const s16 right = samples[last*2+1];
+        for (int i = num_in; i < len; i++)
+        {
+            samples[i*2] = left;
+            samples[i*2+1] = right;
+        }
     }
 }
 

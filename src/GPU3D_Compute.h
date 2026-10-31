@@ -26,6 +26,7 @@
 #include "GPU3D.h"
 
 #include "OpenGLSupport.h"
+#include "OpenGL_Upload.h"
 
 #include "GPU3D_TexcacheOpenGL.h"
 
@@ -203,6 +204,7 @@ private:
 
         float ClearBitmapOffset[2];
     };
+    OpenGL::BufferUploadCache MetaUpload;
     GLuint MetaUniformMemory {};
 
     GLuint Samplers[9] {};

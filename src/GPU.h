@@ -73,6 +73,8 @@ public:
     // false -> this renderer doesn't use RAM framebuffers
     //          - values are renderer-specific (ie. OpenGL texture handle)
     bool GetFramebuffers(void** top, void** bottom);
+    u64 GetFramebufferVersion() const { return FramebufferVersion; }
+    void InvalidateFramebuffer() noexcept;
 
     u8* GetUniqueBankPtr(u32 mask, u32 offset) noexcept;
     const u8* GetUniqueBankPtr(u32 mask, u32 offset) const noexcept;
@@ -807,6 +809,7 @@ private:
     std::unique_ptr<Renderer> Rend = nullptr;
 
     u16 VRAMCaptureBlockFlags[16];
+    u64 FramebufferVersion = 0;
 
     u16* VRAMCBF_ABG[0x20] {};
     u16* VRAMCBF_AOBJ[0x10] {};
@@ -860,6 +863,12 @@ public:
     // a renderer may render to RAM buffers, or to something else (ie. OpenGL)
     // if the renderer uses RAM buffers, they should be 32-bit BGRA, 256x192 for each screen
     virtual bool GetFramebuffers(void** top, void** bottom) = 0;
+    // Current output dimensions, without querying the graphics driver.
+    virtual void GetFramebufferSize(int& width, int& height) const
+    {
+        width = 256;
+        height = 192;
+    }
     virtual void SwapBuffers() { BackBuffer ^= 1; }
 
     virtual bool NeedsShaderCompile() { return false; }

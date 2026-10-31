@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <algorithm>
 #include <cmath>
 #include "Platform.h"
 #include "NDS.h"
@@ -878,6 +879,9 @@ void SPU::Mix(u32 spucycles)
         for (int i = 4; i < 16; i++)
         {
             SPUChannel* chan = &Channels[i];
+            // A disabled channel's runner returns zero without advancing it.
+            // Skip both dispatch and panning that silent result into the mix.
+            if (!(chan->Cnt & (1u << 31))) continue;
 
             s32 channel = chan->DoRun(spucycles);
             chan->PanOutput(channel, left, right);
@@ -1029,25 +1033,33 @@ void SPU::BufferAudio()
     BlipTimer = 0;
 
     int avail = blip_samples_avail(BlipLeft);
+    if (avail <= 0) return;
     s16 temp[avail * 2];
     blip_read_samples(BlipLeft, temp, avail, true);
     blip_read_samples(BlipRight, temp + 1, avail, true);
 
     Platform::Mutex_Lock(AudioLock);
-    for (int i = 0; i < avail * 2; i += 2)
-    {
-        OutputBuffer[OutputBufferWritePos++] = temp[i];
-        OutputBuffer[OutputBufferWritePos++] = temp[i+1];
+    const u32 capacity = 2 * OutputBufferSize;
+    const u32 mask = capacity - 1;
+    const u32 queued = (OutputBufferWritePos - OutputBufferReadPos) & mask;
+    const u32 incoming = static_cast<u32>(avail) * 2;
+    const u32 newWritePos = (OutputBufferWritePos + incoming) & mask;
 
-        OutputBufferWritePos &= ((2*OutputBufferSize)-1);
+    // If the batch exceeds the ring, only its newest samples can survive.
+    // Copy those in at most two spans, including the unused FIFO slot.
+    const u32 count = std::min(incoming, capacity);
+    const u32 skipped = incoming - count;
+    const u32 start = (OutputBufferWritePos + skipped) & mask;
+    const u32 first = std::min(count, capacity - start);
+    memcpy(OutputBuffer + start, temp + skipped, first * sizeof(s16));
+    if (count > first)
+        memcpy(OutputBuffer, temp + skipped + first, (count - first) * sizeof(s16));
 
-        if (OutputBufferWritePos == OutputBufferReadPos)
-        {
-            // advance the read position too, to avoid losing the entire FIFO
-            OutputBufferReadPos += 2;
-            OutputBufferReadPos &= ((2*OutputBufferSize)-1);
-        }
-    }
+    // Preserve the old overflow policy: discard oldest frames and leave one
+    // stereo frame unused so that equal positions always mean an empty FIFO.
+    if (static_cast<u64>(queued) + incoming >= capacity)
+        OutputBufferReadPos = (newWritePos + 2) & mask;
+    OutputBufferWritePos = newWritePos;
     Platform::Mutex_Unlock(AudioLock);
 }
 
@@ -1146,28 +1158,24 @@ void SPU::Sync(bool wait)
 
 int SPU::ReadOutput(s16* data, int samples)
 {
+    if (samples <= 0) return 0;
     Platform::Mutex_Lock(AudioLock);
-    if (OutputBufferReadPos == OutputBufferWritePos)
+    const u32 capacity = 2 * OutputBufferSize;
+    const u32 mask = capacity - 1;
+    const u32 available = (OutputBufferWritePos - OutputBufferReadPos) & mask;
+    const u32 frames = std::min(static_cast<u32>(samples), available / 2);
+    const u32 count = frames * 2;
+    if (count)
     {
-        Platform::Mutex_Unlock(AudioLock);
-        return 0;
-    }
-
-    for (int i = 0; i < samples; i++)
-    {
-        *data++ = OutputBuffer[OutputBufferReadPos++];
-        *data++ = OutputBuffer[OutputBufferReadPos++];
-        OutputBufferReadPos &= ((2*OutputBufferSize)-1);
-
-        if (OutputBufferWritePos == OutputBufferReadPos)
-        {
-            Platform::Mutex_Unlock(AudioLock);
-            return i+1;
-        }
+        const u32 first = std::min(count, capacity - OutputBufferReadPos);
+        memcpy(data, OutputBuffer + OutputBufferReadPos, first * sizeof(s16));
+        if (count > first)
+            memcpy(data + first, OutputBuffer, (count - first) * sizeof(s16));
+        OutputBufferReadPos = (OutputBufferReadPos + count) & mask;
     }
 
     Platform::Mutex_Unlock(AudioLock);
-    return samples;
+    return static_cast<int>(frames);
 }
 
 void SPU::SetOutputSampleRate(double rate)
@@ -1178,6 +1186,7 @@ void SPU::SetOutputSampleRate(double rate)
 
 void SPU::SetOutputSkew(double skew)
 {
+    if (skew == OutputSkew) return;
     blip_set_rates(BlipLeft, INTERNAL_SAMPLE_RATE * skew, OutputSampleRate);
     blip_set_rates(BlipRight, INTERNAL_SAMPLE_RATE * skew, OutputSampleRate);
     OutputSkew = skew;

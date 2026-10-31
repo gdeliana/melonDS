@@ -190,6 +190,7 @@ void blah(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length
 
 bool ComputeRenderer3D::Init()
 {
+    MetaUpload.Clear();
     //glDebugMessageCallback(blah, NULL);
     //glEnable(GL_DEBUG_OUTPUT);
     glGenBuffers(1, &YSpanSetupMemory);
@@ -995,7 +996,7 @@ void ComputeRenderer3D::RenderFrame()
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, BinResultMemory);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, WorkDescMemory);
 
-    MetaUniform meta;
+    MetaUniform meta{};
     meta.DispCnt = GPU3D.RenderDispCnt;
     meta.NumPolygons = GPU3D.RenderNumPolygons;
     meta.NumVariants = numVariants;
@@ -1052,8 +1053,7 @@ void ComputeRenderer3D::RenderFrame()
         meta.FogColor = fogR | (fogG << 8) | (fogB << 16) | (fogA << 24);
     }
 
-    glBindBuffer(GL_UNIFORM_BUFFER, MetaUniformMemory);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(MetaUniform), &meta);
+    MetaUpload.Upload(GL_UNIFORM_BUFFER, MetaUniformMemory, &meta, sizeof(meta));
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, MetaUniformMemory);
 
     glUseProgram(ShaderClearCoarseBinMask);

@@ -96,6 +96,7 @@ RangeList IntRanges =
 DefaultList<bool> DefaultBools =
 {
     {"Screen.Filter", true},
+    {"Instance*.Window*.ScreenXbrz", false},
     {"3D.Soft.Threaded", true},
     {"3D.GL.HiresCoordinates", true},
     {"LimitFPS", true},
@@ -660,7 +661,7 @@ toml::value& Table::ResolvePath(const std::string& path)
     return (*ret)[tmp];
 }
 
-template<typename T> T Table::FindDefault(const std::string& path, T def, DefaultList<T> list)
+template<typename T> T Table::FindDefault(const std::string& path, T def, const DefaultList<T>& list)
 {
     std::string defkey = GetDefaultKey(PathPrefix+path);
 
@@ -673,7 +674,7 @@ template<typename T> T Table::FindDefault(const std::string& path, T def, Defaul
         defkey = defkey.substr(0, sep);
     }
     if (list.count(defkey) != 0)
-        ret = list[defkey];
+        ret = list.at(defkey);
 
     return ret;
 }

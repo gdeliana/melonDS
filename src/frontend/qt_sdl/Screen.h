@@ -20,6 +20,8 @@
 #define SCREEN_H
 
 #include <optional>
+#include <cstdint>
+#include <atomic>
 #include <deque>
 #include <map>
 
@@ -59,6 +61,7 @@ public:
     virtual ~ScreenPanel();
 
     void setFilter(bool filter);
+    void setXbrzFilter(bool enabled);
 
     void setMouseHide(bool enable, int delay);
 
@@ -80,7 +83,8 @@ protected:
     MainWindow* mainWindow;
     EmuInstance* emuInstance;
 
-    bool filter;
+    std::atomic<bool> filter{false};
+    std::atomic<bool> xbrzFilter{false};
 
     int screenRotation;
     int screenGap;
@@ -221,8 +225,20 @@ private:
 
     GLuint screenVertexBuffer, screenVertexArray;
     GLuint screenTexture;
+    GLuint screenSamplers[2] = {}; // nearest, bilinear (OpenGL 3.3+)
     GLuint screenShaderProgram;
     GLint screenShaderTransformULoc, screenShaderScreenSizeULoc;
+    GLuint xbrzShaderProgram = 0;
+    GLint xbrzShaderTransformULoc, xbrzShaderScreenSizeULoc;
+    GLint xbrzNormalScaleULoc;
+    GLuint xbrzAnalysisProgram = 0;
+    GLint xbrzAnalysisLayerULoc;
+    GLuint xbrzInfoTexture = 0, xbrzFramebuffer[2] = {};
+    bool xbrzFramebufferComplete = false;
+    int xbrzSourceWidth = 0, xbrzSourceHeight = 0;
+    uint64_t uploadedFrameVersion = 0, analyzedFrameVersion = 0;
+    unsigned int analyzedLayers = 0;
+    bool prepareXbrz(int width, int height, unsigned int layers, uint64_t version);
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;
@@ -244,4 +260,3 @@ private:
 };
 
 #endif // SCREEN_H
-

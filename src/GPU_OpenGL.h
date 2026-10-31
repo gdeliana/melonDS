@@ -51,6 +51,11 @@ public:
     void SyncVRAMCapture(u32 bank, u32 start, u32 len, bool complete) override;
 
     bool GetFramebuffers(void** top, void** bottom) override;
+    void GetFramebufferSize(int& width, int& height) const override
+    {
+        width = ScreenW;
+        height = ScreenH;
+    }
 
     bool NeedsShaderCompile() override;
     void ShaderCompileStep(int& current, int& count) override;

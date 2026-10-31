@@ -5,6 +5,7 @@ include(FixInterfaceIncludes)
 set(SOURCES_QT_SDL
     main.cpp
     main_shaders.h
+    xbrz_shader.h
     Screen.cpp
     Window.cpp
     EmuInstance.cpp
