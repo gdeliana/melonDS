@@ -25,6 +25,40 @@
    cmake --build build -j$(nproc --all)
    ```
 
+### AppImage
+
+After installing the Linux build dependencies above, plus `make`, `ninja-build`,
+`curl`, `file` and `desktop-file-utils`, run from the repository root:
+
+```sh
+make appimage
+```
+
+For the existing `melonds-gpu` Distrobox development environment, run on the host:
+
+```sh
+make appimage CONTAINER=melonds-gpu
+```
+
+The target builds a Release version with Qt 6 in `build-appimage`, stages it,
+and bundles Qt and dependencies using linuxdeploy and its Qt plugin. Official
+packaging tools download on the first run and are cached in that build folder.
+Packaging tools run without requiring FUSE. The result is
+`build-appimage/dist/melonDS-x86_64.AppImage` (or `melonDS-aarch64.AppImage` on ARM64).
+The output directory also contains `run-melonds.sh`: launch it to create portable
+settings automatically, importing system settings only when the portable file
+is absent. Keep the launcher beside the AppImage when moving the package.
+
+Use `JOBS=8`, `APPIMAGE_BUILD_DIR=/path/to/build` or
+`APPIMAGE_OUTPUT_DIR=/path/to/output` to override the defaults. `QMAKE` can select
+a particular Qt 6 installation when running locally or inside the container.
+The existing `build` directory is unaffected.
+
+An AppImage still depends on the build system's glibc baseline. For broad Linux
+compatibility, build in an older supported distribution, such as the Ubuntu
+22.04 environment used by this repository's AppImage workflow. Building in a
+newer container does not guarantee compatibility with older distributions.
+
 ## Windows
 1. Install [MSYS2](https://www.msys2.org/)
 2. Open the MSYS2 terminal from the Start menu:

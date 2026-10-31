@@ -111,8 +111,34 @@ supported, including enhanced OpenGL resolutions.
 See [PERFORMANCE.md](./PERFORMANCE.md) for optimization details, benchmarks and
 regression-check commands.
 
+### Portable settings
+
+On Linux, run `./run-melonds.sh` beside your AppImage or native executable. It
+creates the portable settings directory automatically and imports the system
+`melonDS.toml` (normally `~/.config/melonDS/melonDS.toml`, respecting
+`XDG_CONFIG_HOME`) only if portable settings do not already exist. Later launches
+preserve those settings.
+
+```sh
+./run-melonds.sh
+./run-melonds.sh --binary /path/to/melonDS-x86_64.AppImage
+./run-melonds.sh --fresh
+```
+
+AppImage settings are stored in `<AppImage filename>.config/melonDS/`; native
+builds use `portable/` beside the executable. The launcher also finds the default
+build outputs when run from this checkout. ROM arguments are forwarded unchanged.
+Only the settings file is imported; existing BIOS, firmware and ROM paths are
+kept as configured. `--fresh` skips import without deleting existing settings.
+AppImage builds place a copy of the launcher in `build-appimage/dist/`.
+
 ## How to build
 See [BUILD.md](./BUILD.md) for build instructions.
+
+To build an AppImage with local Linux dependencies, run `make appimage`.
+With the existing Distrobox environment, use `make appimage CONTAINER=melonds-gpu`.
+The package is written to `build-appimage/dist/`; see
+[AppImage build details](./BUILD.md#appimage) for prerequisites and overrides.
 
 ## TODO LIST
 
